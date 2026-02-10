@@ -1,0 +1,10 @@
+.env
+uploads/
+__pycache__/
+*.pyc
+token.json
+credentials.json
+logs/
+venv/
+.env
+!.env.example

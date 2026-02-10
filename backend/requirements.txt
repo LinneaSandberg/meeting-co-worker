@@ -1,0 +1,14 @@
+elevenlabs
+python-dotenv
+anthropic
+requests
+flask
+flask-cors
+
+# GitHub Integration
+PyGithub>=2.1.1
+
+# Google Calendar Integration
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
