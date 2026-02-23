@@ -5,6 +5,7 @@ import QuestionsList from './QuestionsList';
 import IntegrationControls from './IntegrationControls';
 import ResultsModal from './ResultsModal';
 import { getIntegrationStatus, createIntegrations } from '../services/client';
+import { exportToMarkdown } from '../services/exportMarkdown';
 
 interface ResultsDisplayProps {
   results: TranscriptionResult;
@@ -106,7 +107,10 @@ export default function ResultsDisplay({ results, onReset }: ResultsDisplayProps
     <section id="results-section">
       <div className="results-header">
         <h2>Meeting Insights</h2>
-        <button onClick={onReset} className="btn-secondary">Process Another File</button>
+        <div className="results-header-actions">
+          <button onClick={() => exportToMarkdown(results)} className="btn-export">Export as Markdown</button>
+          <button onClick={onReset} className="btn-secondary">Process Another File</button>
+        </div>
       </div>
 
       {insights.summary && (
