@@ -1,7 +1,7 @@
 import axios from 'axios';
 import type { TranscriptionResult, IntegrationStatus, IntegrationResults, SelectedActionItem, SelectedQuestion } from '../types';
 
-const API_BASE = import.meta.env;
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5001';
 
 export const uploadFile = async (file: File): Promise<TranscriptionResult> => {
   const formData = new FormData();
