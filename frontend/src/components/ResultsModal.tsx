@@ -30,24 +30,24 @@ export default function ResultsModal({ isOpen, onClose, results }: ResultsModalP
                 key={index}
                 className={`integration-result-item ${result.error ? 'integration-result-error' : 'integration-result-success'}`}
               >
-                <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                <div className="result-type-label">
                   {result.type === 'action_item' ? '📌 Action Item' : '❓ Open Question'}
                 </div>
                 <div>{result.title}</div>
 
                 {result.error ? (
-                  <div style={{ color: '#e53e3e', marginTop: '8px' }}>
+                  <div className="result-error-text">
                     Error: {result.error}
                   </div>
                 ) : (
-                  <div style={{ marginTop: '8px' }}>
+                  <div className="result-detail">
                     {result.url && (
                       <a href={result.url} target="_blank" rel="noopener noreferrer" className="result-link">
                         {result.issue_number ? `View Issue #${result.issue_number}` : 'View Calendar Event'} →
                       </a>
                     )}
                     {result.attendees && result.attendees.length > 0 && (
-                      <div style={{ fontSize: '0.9rem', color: '#718096', marginTop: '4px' }}>
+                      <div className="result-attendees">
                         Attendees: {result.attendees.join(', ')}
                       </div>
                     )}

@@ -22,7 +22,7 @@ export default function QuestionsList({ questions, selectedQuestions, onSelectio
             {question.context && (
               <div className="context-text">→ {question.context}</div>
             )}
-            <div style={{ marginTop: '8px', display: 'flex', gap: '16px' }}>
+            <div className="checkbox-options">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -30,7 +30,7 @@ export default function QuestionsList({ questions, selectedQuestions, onSelectio
                   checked={selection.github}
                   onChange={(e) => onSelectionChange(index, 'github', e.target.checked)}
                 />
-                <span style={{ marginLeft: '6px' }}>Create GitHub Issue</span>
+                <span>Create GitHub Issue</span>
               </label>
               <label className="checkbox-label">
                 <input
@@ -39,7 +39,7 @@ export default function QuestionsList({ questions, selectedQuestions, onSelectio
                   checked={selection.calendar}
                   onChange={(e) => onSelectionChange(index, 'calendar', e.target.checked)}
                 />
-                <span style={{ marginLeft: '6px' }}>Create Calendar Event</span>
+                <span>Create Calendar Event</span>
               </label>
             </div>
           </div>
