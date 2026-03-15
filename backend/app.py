@@ -1,8 +1,13 @@
 import os
+import uuid
+import asyncio
 from pathlib import Path
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from werkzeug.utils import secure_filename
+from functools import partial
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from sse_starlette.sse import EventSourceResponse
+
 from transcribe import process_meeting
 from integrations import (
     check_github_config,
@@ -18,89 +23,184 @@ from logging_config import get_app_logger
 # Initialize logger
 logger = get_app_logger()
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
 ALLOWED_EXTENSIONS = {'mp3', 'wav', 'm4a', 'flac', 'ogg', 'mp4', 'avi', 'mov'}
 
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
-
 # Ensure upload folder exists
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# In-memory job tracking
+jobs: dict[str, dict] = {}
 
-def allowed_file(filename):
+
+def allowed_file(filename: str) -> bool:
     """Check if file extension is allowed."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    """Handle file upload and process the meeting."""
-    logger.info("Received file upload request")
-
-    # Check if file was uploaded
-    if 'file' not in request.files:
-        logger.warning("Upload request missing file")
-        return jsonify({'error': 'No file provided'}), 400
-
-    file = request.files['file']
-
-    # Check if file was selected
-    if file.filename == '':
-        logger.warning("Upload request with empty filename")
-        return jsonify({'error': 'No file selected'}), 400
-
-    # Validate file type
-    if not allowed_file(file.filename):
-        logger.warning(f"Invalid file type attempted: {file.filename}")
-        return jsonify({'error': f'Invalid file type. Allowed: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
-
+async def run_job(job_id: str, filepath: str):
+    """Run the transcription + extraction pipeline in a background thread."""
     try:
-        # Save uploaded file
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
-        logger.info(f"File saved: {filename} ({os.path.getsize(filepath)} bytes)")
+        def on_progress(step: str):
+            if step == "transcribing":
+                jobs[job_id].update(step="transcribing", progress=33)
+            elif step == "extracting":
+                jobs[job_id].update(step="extracting", progress=66)
+            elif step == "complete":
+                jobs[job_id].update(step="complete", progress=100)
 
-        # Process the meeting
-        logger.info(f"Starting transcription for: {filename}")
-        result = process_meeting(filepath)
-        logger.info(f"Transcription completed for: {filename}")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            partial(process_meeting, filepath, on_progress=on_progress)
+        )
 
-        # Clean up uploaded file
-        os.remove(filepath)
-        logger.debug(f"Cleaned up temporary file: {filepath}")
-
-        # Return results
-        return jsonify({
-            'success': True,
-            'transcript': result['transcript'],
-            'insights': result['insights']
-        })
+        jobs[job_id].update(
+            step="complete",
+            progress=100,
+            result={
+                'success': True,
+                'transcript': result['transcript'],
+                'insights': result['insights']
+            }
+        )
+        logger.info(f"Job {job_id} completed successfully")
 
     except Exception as e:
-        logger.error(f"Error processing file upload: {str(e)}", exc_info=True)
-
-        # Clean up file if it exists
-        if 'filepath' in locals() and os.path.exists(filepath):
-            os.remove(filepath)
-            logger.debug(f"Cleaned up file after error: {filepath}")
-
-        # Return error (don't expose internal details)
+        logger.error(f"Job {job_id} failed: {str(e)}", exc_info=True)
         error_message = str(e)
         if 'API' in error_message or 'key' in error_message.lower():
             error_message = 'API error. Please check your API keys in .env file.'
+        elif 'corrupted' in error_message.lower() or 'invalid_audio' in error_message:
+            error_message = 'Invalid or corrupted audio file. Please ensure the file is playable.'
+        elif len(error_message) > 200:
+            error_message = 'An error occurred while processing your file.'
+        jobs[job_id].update(step="error", progress=0, error=error_message)
 
-        return jsonify({'error': error_message}), 500
+    finally:
+        # Clean up uploaded file
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            logger.debug(f"Cleaned up temporary file: {filepath}")
 
 
-@app.route('/integration-status', methods=['GET'])
-def integration_status():
+@app.post('/upload')
+async def upload_file(file: UploadFile = File(...)):
+    """Handle file upload and start async processing."""
+    logger.info("Received file upload request")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail='No file selected')
+
+    if not allowed_file(file.filename):
+        raise HTTPException(
+            status_code=400,
+            detail=f'Invalid file type. Allowed: {", ".join(ALLOWED_EXTENSIONS)}'
+        )
+
+    try:
+        # Save uploaded file
+        import re
+        filename = re.sub(r'[^\w\s\-.]', '', file.filename).strip()
+        if not filename:
+            filename = 'upload'
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail='File too large. Maximum size is 100MB.')
+
+        with open(filepath, 'wb') as f:
+            f.write(content)
+
+        logger.info(f"File saved: {filename} ({len(content)} bytes)")
+
+        # Create job and start processing
+        job_id = str(uuid.uuid4())
+        jobs[job_id] = {"step": "uploading", "progress": 0}
+
+        asyncio.create_task(run_job(job_id, filepath))
+
+        return {"job_id": job_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error handling file upload: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail='Failed to process upload')
+
+
+@app.get('/jobs/{job_id}/stream')
+async def job_stream(job_id: str, request: Request):
+    """SSE endpoint for streaming job progress."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail='Job not found')
+
+    import json
+
+    async def event_generator():
+        last_step = None
+        while True:
+            if await request.is_disconnected():
+                break
+
+            job = jobs.get(job_id)
+            if not job:
+                break
+
+            current_step = job.get("step")
+
+            if current_step != last_step:
+                last_step = current_step
+                data = {"step": job["step"], "progress": job["progress"]}
+
+                if current_step == "complete" and "result" in job:
+                    data["result"] = job["result"]
+                    yield {"event": "message", "data": json.dumps(data)}
+                    break
+                elif current_step == "error":
+                    data["error"] = job.get("error", "Unknown error")
+                    yield {"event": "message", "data": json.dumps(data)}
+                    break
+                else:
+                    yield {"event": "message", "data": json.dumps(data)}
+
+            await asyncio.sleep(0.5)
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get('/jobs/{job_id}/result')
+async def job_result(job_id: str):
+    """Get the final result for a completed job (fallback for SSE)."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail='Job not found')
+
+    job = jobs[job_id]
+
+    if job["step"] == "error":
+        raise HTTPException(status_code=500, detail=job.get("error", "Processing failed"))
+
+    if job["step"] != "complete":
+        return {"status": "processing", "step": job["step"], "progress": job["progress"]}
+
+    return job["result"]
+
+
+@app.get('/integration-status')
+async def integration_status():
     """Check which integrations are configured and available."""
     logger.debug("Checking integration status")
 
@@ -109,24 +209,23 @@ def integration_status():
 
     logger.info(f"Integration status - GitHub: {github_config['enabled']}, Calendar: {calendar_config['enabled']}")
 
-    return jsonify({
+    return {
         'github_enabled': github_config['enabled'],
         'github_repo': github_config.get('repo'),
         'calendar_enabled': calendar_config['enabled'],
         'calendar_type': calendar_config.get('calendar_type')
-    })
+    }
 
 
-@app.route('/create-integrations', methods=['POST'])
-def create_integrations():
+@app.post('/create-integrations')
+async def create_integrations(request: Request):
     """Handle creation of GitHub issues and Google Calendar events."""
     logger.info("Received create-integrations request")
 
-    data = request.json
+    data = await request.json()
 
     if not data:
-        logger.warning("Create-integrations request with no data")
-        return jsonify({'error': 'No data provided'}), 400
+        raise HTTPException(status_code=400, detail='No data provided')
 
     action_items = data.get('action_items', [])
     open_questions = data.get('open_questions', [])
@@ -140,7 +239,6 @@ def create_integrations():
     # Process action items
     for item in action_items:
         if item.get('create_github'):
-            # Format and create GitHub issue for action item
             title, body = format_action_item_issue(
                 task=item['task'],
                 owner=item.get('owner'),
@@ -159,7 +257,6 @@ def create_integrations():
 
     # Process open questions
     for question in open_questions:
-        # Create GitHub issue if requested
         if question.get('create_github'):
             title, body = format_question_issue(
                 question=question['question'],
@@ -176,14 +273,12 @@ def create_integrations():
                 'error': result.get('error')
             })
 
-        # Create calendar event if requested
         if question.get('create_calendar'):
             summary, description, attendees = format_question_event(
                 question=question['question'],
                 context=question.get('context')
             )
 
-            # Get duration from env or use default
             duration = int(os.getenv('DEFAULT_MEETING_DURATION', 30))
 
             result = create_calendar_event(
@@ -202,7 +297,6 @@ def create_integrations():
                 'error': result.get('error')
             })
 
-    # Check if any operation succeeded
     any_success = (
         any(item.get('url') for item in results['github_issues']) or
         any(event.get('url') for event in results['calendar_events'])
@@ -218,17 +312,19 @@ def create_integrations():
         f"Calendar: {calendar_success} created, {calendar_failed} failed"
     )
 
-    return jsonify({
+    return {
         'success': any_success,
         'results': results
-    })
+    }
 
 
 if __name__ == '__main__':
+    import uvicorn
+
     print("\n" + "="*60)
-    print("🚀 Meeting Copilot Web UI")
+    print("Meeting Copilot Web UI")
     print("="*60)
     print("\nOpen your browser to: http://localhost:5001")
     print("\nPress Ctrl+C to stop the server\n")
 
-    app.run(debug=True, port=5001)
+    uvicorn.run("app:app", host="0.0.0.0", port=5001, reload=True)

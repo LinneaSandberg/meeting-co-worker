@@ -174,25 +174,34 @@ TRANSCRIPT:
         return {"raw_response": response_text}
 
 
-def process_meeting(audio_path: str) -> dict:
+def process_meeting(audio_path: str, on_progress=None) -> dict:
     """
     Full pipeline: transcribe audio and extract insights.
-    
+
     Args:
         audio_path: Path to the meeting audio file
-    
+        on_progress: Optional callback function called with step name
+                     ('transcribing', 'extracting', 'complete')
+
     Returns:
         Dictionary with transcript and extracted insights
     """
     # Step 1: Transcribe
+    if on_progress:
+        on_progress("transcribing")
     transcription = transcribe_audio(audio_path)
-    
+
     # Step 2: Format transcript
     formatted_transcript = format_transcript_for_extraction(transcription)
-    
+
     # Step 3: Extract insights
+    if on_progress:
+        on_progress("extracting")
     insights = extract_meeting_insights(formatted_transcript)
-    
+
+    if on_progress:
+        on_progress("complete")
+
     return {
         "transcript": formatted_transcript,
         "insights": insights

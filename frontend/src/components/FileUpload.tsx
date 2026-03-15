@@ -108,7 +108,7 @@ export default function FileUpload({ onUpload }: FileUploadProps) {
           type="file"
           accept="audio/*,video/*"
           onChange={handleChange}
-          style={{ display: 'none' }}
+          className="file-input-hidden"
         />
       </div>
 

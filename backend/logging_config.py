@@ -60,7 +60,7 @@ def setup_logger(name: str, log_file: str = "app.log", level: int = logging.INFO
 
 # Pre-configured loggers for each module
 def get_app_logger() -> logging.Logger:
-    """Get logger for Flask app."""
+    """Get logger for FastAPI app."""
     return setup_logger("meeting_copilot.app", "app.log")
 
 

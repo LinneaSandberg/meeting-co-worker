@@ -2,8 +2,10 @@ elevenlabs
 python-dotenv
 anthropic
 requests
-flask
-flask-cors
+fastapi
+uvicorn[standard]
+python-multipart
+sse-starlette
 
 # GitHub Integration
 PyGithub>=2.1.1

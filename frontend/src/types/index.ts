@@ -60,6 +60,8 @@ export interface IntegrationResults {
   };
 }
 
+export type ProcessingStep = 'uploading' | 'transcribing' | 'extracting' | 'complete';
+
 export const AppState = {
   UPLOAD: 'UPLOAD',
   PROCESSING: 'PROCESSING',

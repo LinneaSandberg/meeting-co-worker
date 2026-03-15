@@ -2,27 +2,42 @@ import { useState } from 'react';
 import FileUpload from './components/FileUpload';
 import ProcessingStatus from './components/ProcessingStatus';
 import ResultsDisplay from './components/ResultsDisplay';
-import { uploadFile } from './services/client';
-import type { TranscriptionResult } from './types';
+import { uploadFile, subscribeToJob } from './services/client';
+import type { TranscriptionResult, ProcessingStep } from './types';
 import { AppState } from './types';
 
 function App() {
   const [state, setState] = useState<AppState>(AppState.UPLOAD);
   const [results, setResults] = useState<TranscriptionResult | null>(null);
   const [error, setError] = useState<string>('');
+  const [currentStep, setCurrentStep] = useState<ProcessingStep>('uploading');
 
   const handleUpload = async (file: File) => {
     setState(AppState.PROCESSING);
+    setCurrentStep('uploading');
     setError('');
 
     try {
-      const result = await uploadFile(file);
-      setResults(result);
-      setState(AppState.RESULTS);
+      const { job_id } = await uploadFile(file);
+      setCurrentStep('transcribing');
+
+      subscribeToJob(job_id, {
+        onStep: (step) => {
+          setCurrentStep(step);
+        },
+        onComplete: (result) => {
+          setResults(result);
+          setState(AppState.RESULTS);
+        },
+        onError: (errorMsg) => {
+          setError(errorMsg);
+          setState(AppState.ERROR);
+        }
+      });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       console.error('Upload error:', err);
-      setError(err.response?.data?.error || err.message || 'Failed to process file');
+      setError(err.response?.data?.detail || err.message || 'Failed to process file');
       setState(AppState.ERROR);
     }
   };
@@ -31,6 +46,7 @@ function App() {
     setState(AppState.UPLOAD);
     setResults(null);
     setError('');
+    setCurrentStep('uploading');
   };
 
   return (
@@ -42,7 +58,7 @@ function App() {
 
       <main>
         {state === AppState.UPLOAD && <FileUpload onUpload={handleUpload} />}
-        {state === AppState.PROCESSING && <ProcessingStatus />}
+        {state === AppState.PROCESSING && <ProcessingStatus step={currentStep} />}
         {state === AppState.RESULTS && results && (
           <ResultsDisplay results={results} onReset={handleReset} />
         )}
